@@ -30,6 +30,11 @@ import java.io.InputStreamReader;
 import java.util.LinkedList;
 import java.util.Locale;
 
+/**
+ * 
+ * @author Volodymyr Volkov
+ *
+ */
 public class HDRBatchHelper extends JPanel implements ActionListener {
     private static final long serialVersionUID = -8653871707049477151L;
     private static final int windowSize = 600;
@@ -46,7 +51,10 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
     JMenuItem menuItemOpen = new JMenuItem("Open");
     JMenuItem menuItemProcess = new JMenuItem("Process");
     ImageCellRenderer renderer = new ImageCellRenderer();
-    LinkedList< IconNamed[] > processingQueue = new LinkedList< IconNamed[] >();
+
+    // TODO implement load balancing using the queue
+    LinkedList< HDRProcessingThread > processingQueue = new LinkedList< HDRProcessingThread >();
+    public static int sequenceId = 0;
     File temporaryDirectory;
     
     public HDRBatchHelper() {
@@ -90,7 +98,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         if (fileNames != null) {
 	        model.clear();
 	        for (int i = 0; i < fileNames.length; i++) {
-	            model.addElement( new IconNamed( currentDirectiory + "/" + fileNames[i]) );
+	            model.addElement( new IconFile( currentDirectiory + "/" + fileNames[i]) );
 	        }
         }
     }
@@ -128,22 +136,22 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
                 setForeground(list.getForeground());
             }
             
-            IconNamed selectedImage = (IconNamed)value;
+            IconFile selectedImage = (IconFile)value;
             setIcon( selectedImage.getIcon() );
             return this;
         }
     };
 
-    class IconNamed implements Icon {
-        private String name;
+    class IconFile implements Icon {
+        private File file;
         private int width;
         private int height;
         private Image imageScaled;
         private Icon icon;
         private ImageObserver imageObserver = null;
         
-        public IconNamed(String s) {
-            setName(s);
+        public IconFile(String s) {
+            file = new File(s);
             imageScaled = loadImage(s);
             
             // very strange thing: w/o following line, the icons are empty
@@ -179,17 +187,17 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             
             return image.getScaledInstance(width, height, Image.SCALE_SMOOTH);
         }
-
-        public void setName(String name) {
-            this.name = name;
-        }
-
-        public String getName() {
-            return name;
-        }
         
         public Icon getIcon() {
             return icon;
+        }
+        
+        public void setFile(File f) {
+            file = f;
+        }
+        
+        public File getFile() {
+            return file;
         }
 
         @Override
@@ -228,46 +236,83 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         	createTemporaryDirectory();
         	Object[] selectedImages = photosList.getSelectedValues();
         	if (selectedImages.length > 0) {
-        		IconNamed[] hdrSequence = new IconNamed[selectedImages.length];
-        		for (int i = 0; i < selectedImages.length; i++) {
-        			hdrSequence[i] = (IconNamed)selectedImages[i];
+        	    IconFile[] images = new IconFile[selectedImages.length];
+        		for (int i = 0; i < selectedImages.length; ++i) {
+        			images[i] = (IconFile)selectedImages[i];
+        			model.removeElement(selectedImages[i]);
         		}
-      			setStatus(selectedImages.getClass().getName());
+
+        		HDRProcessingThread hdrSequence = new HDRProcessingThread(images, sequenceId++);
+        		
             	synchronized (processingQueue) {
-            		processingQueue.add(hdrSequence);
+            		processingQueue.addFirst(hdrSequence);
             	}
-            	processHdrSequence(processingQueue);
+            	processHdrSequence();
+            	
         	} else {
         		setStatus("You must select something!");
         	}
         }
     }
     
-	private void processHdrSequence(LinkedList< IconNamed[] > queue) {
-		try {
-			String[] command = new String[]{"ls", "-la", queue.getLast()[0].name};
-			System.out.println(command);
-			Process p = Runtime.getRuntime().exec(command);
+    class HDRProcessingThread extends Thread {
+        public int sequenceId;
+        private IconFile[] images;
+        private Process process;
+        
+        HDRProcessingThread(IconFile[] i, int id) {
+            images = i;
+            sequenceId = id;
+        }
+        
+        public void run() {
+            try {
+                String[] command = new String[]{"hdr.sh", images[0].getFile().getParent()};
+                process = Runtime.getRuntime().exec(command);
 
-			BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
-			String line = reader.readLine();
-			while (line != null) {
-				System.out.println(line);
-				line = reader.readLine();
-			}
+                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                String line = reader.readLine();
+                while (line != null) {
+                    System.out.println(line);
+                    line = reader.readLine();
+                }
 
-            p.waitFor();
-		} catch (IOException e1) {
-			e1.printStackTrace();
-		} catch (InterruptedException e2) {
-			e2.printStackTrace();
-		}
+                process.waitFor();
+            } catch (IOException e1) {
+                e1.printStackTrace();
+            } catch (InterruptedException e2) {
+                e2.printStackTrace();
+            }
+        }
+    }
+    
+	private void processHdrSequence() {
+	    HDRProcessingThread hdrTread;
+	    synchronized (processingQueue) {
+	        hdrTread = processingQueue.pollFirst();
+        }
+	    if (hdrTread != null) {
+	        // copy images for processing
+	        File processingDir = new File(temporaryDirectory + "/" + hdrTread.sequenceId + "/");
+	        processingDir.mkdir();
+	        for ( IconFile imageFile : hdrTread.images ) {
+	            File movedImageFile = new File(processingDir + "/" + imageFile.getFile().getName());
+	            if (imageFile.getFile().renameTo(movedImageFile)) {
+	                imageFile.setFile(movedImageFile);
+	            } else {
+	                System.out.println("Error while renaming an image: " + imageFile.getFile().getPath());
+	            }
+	        }
+	        
+	        hdrTread.start();
+	    } else {
+	        System.out.println("Popping an element fro mempty processingQueue...");
+	    }
 	}
     
     private void createTemporaryDirectory() {
-		temporaryDirectory = new File( currentDirectiory + ".tmp" );
+		temporaryDirectory = new File( currentDirectiory + "/" + "tmp" );
 		temporaryDirectory.mkdir();
 		System.out.println(temporaryDirectory.getPath() + " created");
-		temporaryDirectory.delete();
     }
 }
