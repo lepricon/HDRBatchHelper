@@ -55,7 +55,6 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
     // TODO implement load balancing using the queue
     LinkedList< HDRProcessingThread > processingQueue = new LinkedList< HDRProcessingThread >();
     public static int sequenceId = 0;
-    File temporaryDirectory;
     
     public HDRBatchHelper() {
         renderer.setPreferredSize(new Dimension(previewSize + photoPadding, previewSize + photoPadding));
@@ -267,7 +266,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         
         public void run() {
             try {
-                String[] command = new String[]{"hdr.sh", images[0].getFile().getParent()};
+                String[] command = new String[]{"hdr.sh", images[0].getFile().getParent(), String.valueOf(sequenceId)};
                 process = Runtime.getRuntime().exec(command);
 
                 BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
@@ -278,11 +277,38 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
                 }
 
                 process.waitFor();
+                cleanupTmp();
+
             } catch (IOException e1) {
                 e1.printStackTrace();
             } catch (InterruptedException e2) {
                 e2.printStackTrace();
             }
+        }
+        
+        private void cleanupTmp() {
+            // move hdrXX.jpg back
+            String hdrFile = new String("hdr" + String.valueOf(sequenceId) + ".jpg");
+            File movedHrdBack = new File(currentDirectiory + hdrFile);
+            File createdHdr = new File(currentDirectiory + "tmp/" + String.valueOf(sequenceId) + "/" + hdrFile);
+            createdHdr.renameTo(movedHrdBack);
+            
+            // deleting original photos
+            File tmpDirectory = new File(currentDirectiory + "tmp/" + String.valueOf(sequenceId));
+            FilenameFilter filterAllFiles = new FilenameFilter() {
+                @Override
+                public boolean accept(File dir, String name) {
+                    return true;
+                }
+            };
+            String[] fileNames = tmpDirectory.list(filterAllFiles);
+            for (String filename : fileNames) {
+                String tmpDir = new String(tmpDirectory.getPath() + "/" + filename);
+                if ( !(new File(tmpDir)).delete() ) {
+                    System.out.println("Error deleting file: " + tmpDir);
+                }
+            }
+            tmpDirectory.delete();
         }
     }
     
@@ -293,10 +319,10 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         }
 	    if (hdrTread != null) {
 	        // copy images for processing
-	        File processingDir = new File(temporaryDirectory + "/" + hdrTread.sequenceId + "/");
+	        File processingDir = new File(currentDirectiory + "tmp/" + hdrTread.sequenceId + "/");
 	        processingDir.mkdir();
 	        for ( IconFile imageFile : hdrTread.images ) {
-	            File movedImageFile = new File(processingDir + "/" + imageFile.getFile().getName());
+	            File movedImageFile = new File(processingDir + imageFile.getFile().getName());
 	            if (imageFile.getFile().renameTo(movedImageFile)) {
 	                imageFile.setFile(movedImageFile);
 	            } else {
@@ -306,13 +332,12 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
 	        
 	        hdrTread.start();
 	    } else {
-	        System.out.println("Popping an element fro mempty processingQueue...");
+	        System.out.println("Popping an element from empty processingQueue...");
 	    }
 	}
     
     private void createTemporaryDirectory() {
-		temporaryDirectory = new File( currentDirectiory + "/" + "tmp" );
-		temporaryDirectory.mkdir();
-		System.out.println(temporaryDirectory.getPath() + " created");
+		(new File( currentDirectiory + "tmp/" )).mkdir();
+		System.out.println(currentDirectiory + "tmp/ created");
     }
 }
