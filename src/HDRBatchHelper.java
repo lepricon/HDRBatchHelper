@@ -27,6 +27,7 @@ import java.io.File;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.Locale;
 
@@ -37,7 +38,8 @@ import java.util.Locale;
  */
 public class HDRBatchHelper extends JPanel implements ActionListener {
     private static final long serialVersionUID = -8653871707049477151L;
-    private static final int windowSize = 600;
+    private static final int windowHeight = 600;
+    private static final int windowWidth = 800;
     private static final int previewSize = 100;
     private static final int photoPadding = 15;
     final DefaultListModel model = new DefaultListModel();
@@ -59,7 +61,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
     public HDRBatchHelper() {
         renderer.setPreferredSize(new Dimension(previewSize + photoPadding, previewSize + photoPadding));
 
-        listScroller.setPreferredSize(new Dimension(windowSize, windowSize));
+        listScroller.setPreferredSize(new Dimension(windowWidth, windowHeight));
         
         photosList.setCellRenderer(renderer);
         photosList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
@@ -90,16 +92,18 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         }
     }
     
-    private void loadPhotoFiles(String directory) {
+    private int loadPhotoFiles(String directory) {
         File files = new File(directory);
         FilenameFilter filter = new JpegFilter();
         String[] fileNames = files.list(filter);
+        Arrays.sort(fileNames);
         if (fileNames != null) {
 	        model.clear();
 	        for (int i = 0; i < fileNames.length; i++) {
 	            model.addElement( new IconFile( currentDirectiory + "/" + fileNames[i]) );
 	        }
         }
+        return fileNames.length;
     }
     
     public static void main(String[] args) {
@@ -184,7 +188,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
                 width = height * imageWidth / imageHeight;
             }
             
-            return image.getScaledInstance(width, height, Image.SCALE_SMOOTH);
+            return image.getScaledInstance(width, height, Image.SCALE_FAST);
         }
         
         public Icon getIcon() {
@@ -227,12 +231,19 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             int returnVal = fc.showOpenDialog(this);
             if (returnVal == JFileChooser.APPROVE_OPTION) {
                 File directory = fc.getSelectedFile();
-                currentDirectiory = directory.getPath();
+                currentDirectiory = directory.getPath() + "/";
                 setStatus(currentDirectiory);
-                loadPhotoFiles(currentDirectiory);
+                sequenceId = 0;
+                CharSequence chSeq = new String(" ");
+                if (! currentDirectiory.contains(chSeq)) {
+                    int numberImageLoaded = loadPhotoFiles(currentDirectiory);
+                    setStatus("Items loaded: " + String.valueOf(numberImageLoaded) + " from " + currentDirectiory);
+                } else {
+                    setStatus("Sorry, but the program does not support spases in dirnames for now...");
+                }
             }
         } else if (e.getActionCommand() == "Process") {
-        	createTemporaryDirectory();
+            (new File( currentDirectiory + "tmp/" )).mkdir();
         	Object[] selectedImages = photosList.getSelectedValues();
         	if (selectedImages.length > 0) {
         	    IconFile[] images = new IconFile[selectedImages.length];
@@ -304,11 +315,14 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             String[] fileNames = tmpDirectory.list(filterAllFiles);
             for (String filename : fileNames) {
                 String tmpDir = new String(tmpDirectory.getPath() + "/" + filename);
-                if ( !(new File(tmpDir)).delete() ) {
-                    System.out.println("Error deleting file: " + tmpDir);
-                }
+//                if ( !(new File(tmpDir)).delete() ) {
+                    System.out.println("E deleting file: " + tmpDir);
+//                }
             }
-            tmpDirectory.delete();
+//            tmpDirectory.delete();
+            
+            // delete .../tmp/
+//            (new File(tmpDirectory.getParent())).delete();
         }
     }
     
@@ -322,7 +336,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
 	        File processingDir = new File(currentDirectiory + "tmp/" + hdrTread.sequenceId + "/");
 	        processingDir.mkdir();
 	        for ( IconFile imageFile : hdrTread.images ) {
-	            File movedImageFile = new File(processingDir + imageFile.getFile().getName());
+	            File movedImageFile = new File(processingDir + "/" + imageFile.getFile().getName());
 	            if (imageFile.getFile().renameTo(movedImageFile)) {
 	                imageFile.setFile(movedImageFile);
 	            } else {
@@ -335,9 +349,4 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
 	        System.out.println("Popping an element from empty processingQueue...");
 	    }
 	}
-    
-    private void createTemporaryDirectory() {
-		(new File( currentDirectiory + "tmp/" )).mkdir();
-		System.out.println(currentDirectiory + "tmp/ created");
-    }
 }
