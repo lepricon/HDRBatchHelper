@@ -32,9 +32,7 @@ import java.util.LinkedList;
 import java.util.Locale;
 
 /**
- * 
  * @author Volodymyr Volkov
- *
  */
 public class HDRBatchHelper extends JPanel implements ActionListener {
     private static final long serialVersionUID = -8653871707049477151L;
@@ -54,6 +52,8 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
     JMenuItem menuItemProcess = new JMenuItem("Process");
     ImageCellRenderer renderer = new ImageCellRenderer();
 
+    private MediaTracker mTracker = new MediaTracker(photosList);
+    
     // TODO implement load balancing using the queue
     LinkedList< HDRProcessingThread > processingQueue = new LinkedList< HDRProcessingThread >();
     public static int sequenceId = 0;
@@ -92,16 +92,29 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         }
     }
     
+    class ImageLoader extends Thread {
+        String[] fileNames;
+        ImageLoader(String[] _fileNames) {
+            fileNames = _fileNames;
+        }
+
+        @Override
+        public void run() {
+            model.clear();
+            for (int i = 0; i < fileNames.length; i++) {
+                model.addElement( new IconFile(currentDirectiory + "/" + fileNames[i], i) );
+            }
+        }
+    };
+
     private int loadPhotoFiles(String directory) {
         File files = new File(directory);
         FilenameFilter filter = new JpegFilter();
         String[] fileNames = files.list(filter);
         Arrays.sort(fileNames);
         if (fileNames != null) {
-	        model.clear();
-	        for (int i = 0; i < fileNames.length; i++) {
-	            model.addElement( new IconFile( currentDirectiory + "/" + fileNames[i]) );
-	        }
+	        ImageLoader loader = new ImageLoader(fileNames);
+	        loader.start();
         }
         return fileNames.length;
     }
@@ -112,7 +125,6 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
 
     public void setStatus(String s) {
         status.setText(s);
-
     }
     
     class ImageCellRenderer extends JLabel implements ListCellRenderer {
@@ -147,48 +159,41 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
 
     class IconFile implements Icon {
         private File file;
-        private int width;
-        private int height;
-        private Image imageScaled;
+        private int width = previewSize;
+        private int height = previewSize;
+        private Image image;
         private Icon icon;
+        private int iconIndex;
         private ImageObserver imageObserver = null;
         
-        public IconFile(String s) {
+        public IconFile(String s, int i) {
+            iconIndex = i;
             file = new File(s);
-            imageScaled = loadImage(s);
-            
-            // very strange thing: w/o following line, the icons are empty
-            icon = new ImageIcon(imageScaled);
-        }
+            image = Toolkit.getDefaultToolkit().getImage(s);
 
-        private Image loadImage(String name) {
-            Image image = Toolkit.getDefaultToolkit().createImage(name);
-            Component comp = new Component() {
-                    private static final long serialVersionUID = 5242197476830270365L;
-                };
-            int id = 0;
-            MediaTracker mTracker = new MediaTracker(comp);
             synchronized (mTracker) {
-                mTracker.addImage(image, id);
+                mTracker.addImage(image, iconIndex, width, height);
                 try {
-                    mTracker.waitForID(id);
+                    mTracker.waitForID(iconIndex);
                 } catch (InterruptedException e) {
                     System.out.println("INTERRUPTED while loading Image");
                 }
-                mTracker.removeImage(image, id);
-            }
-            // ensure proper scaling
-            int imageWidth = image.getWidth(imageObserver);
-            int imageHeight = image.getHeight(imageObserver);
-            if (imageWidth > imageHeight) {
-                width = previewSize;
-                height = width * imageHeight / imageWidth;
-            } else {
-                height = previewSize;
-                width = height * imageWidth / imageHeight;
+                mTracker.removeImage(image);
             }
             
-            return image.getScaledInstance(width, height, Image.SCALE_FAST);
+            // ensure proper scaling
+            if (image.getWidth(imageObserver) > image.getHeight(imageObserver)) {
+                width = previewSize;
+                height = -1;
+            } else {
+                height = previewSize;
+                width = -1;
+            }
+
+            image = image.getScaledInstance(width, height, Image.SCALE_FAST);
+
+            // very strange thing: w/o following line, the icons are empty
+            icon = new ImageIcon(image);
         }
         
         public Icon getIcon() {
@@ -206,9 +211,9 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         @Override
         public void paintIcon(Component c, Graphics g, int x, int y) {
             if (imageObserver == null) {
-                g.drawImage(imageScaled, x, y, c);
+                g.drawImage(image, x, y, c);
             } else {
-                g.drawImage(imageScaled, x, y, imageObserver);
+                g.drawImage(image, x, y, imageObserver);
             }
         }
 
@@ -232,10 +237,10 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             if (returnVal == JFileChooser.APPROVE_OPTION) {
                 File directory = fc.getSelectedFile();
                 currentDirectiory = directory.getPath() + "/";
-                setStatus(currentDirectiory);
                 sequenceId = 0;
                 CharSequence chSeq = new String(" ");
                 if (! currentDirectiory.contains(chSeq)) {
+                    setStatus("loading images...");
                     int numberImageLoaded = loadPhotoFiles(currentDirectiory);
                     setStatus("Items loaded: " + String.valueOf(numberImageLoaded) + " from " + currentDirectiory);
                 } else {
@@ -250,6 +255,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         		for (int i = 0; i < selectedImages.length; ++i) {
         			images[i] = (IconFile)selectedImages[i];
         			model.removeElement(selectedImages[i]);
+        			mTracker.removeImage(((IconFile)selectedImages[i]).image);
         		}
 
         		HDRProcessingThread hdrSequence = new HDRProcessingThread(images, sequenceId++);
@@ -315,14 +321,15 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             String[] fileNames = tmpDirectory.list(filterAllFiles);
             for (String filename : fileNames) {
                 String tmpDir = new String(tmpDirectory.getPath() + "/" + filename);
-//                if ( !(new File(tmpDir)).delete() ) {
-                    System.out.println("E deleting file: " + tmpDir);
-//                }
+                if ( !(new File(tmpDir)).delete() ) {
+                    System.out.println("Error deleting file: " + tmpDir);
+                }
             }
-//            tmpDirectory.delete();
+            tmpDirectory.delete();
             
             // delete .../tmp/
-//            (new File(tmpDirectory.getParent())).delete();
+            // actual deletion will be done when the last image will be processed
+            (new File(tmpDirectory.getParent())).delete();
         }
     }
     

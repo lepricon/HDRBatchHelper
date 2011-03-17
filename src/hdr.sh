@@ -19,7 +19,7 @@ align_image_stack -va AIS_ IMG_????.tif
 enfuse -o enfuse.tif AIS_????.tif
 /usr/bin/convert -quality 95 enfuse.tif hdr$2.jpg
 
-echo "removing..."
+echo "removing temp *.tif files..."
 rm AIS_????.tif
 rm IMG_????.tif
 rm enfuse.tif
