@@ -8,6 +8,7 @@ import javax.swing.JList;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.ListCellRenderer;
 import javax.swing.ListSelectionModel;
@@ -30,33 +31,38 @@ import java.io.InputStreamReader;
 import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.Locale;
+import java.util.Observable;
+import java.util.Observer;
 
 /**
  * @author Volodymyr Volkov
  */
 public class HDRBatchHelper extends JPanel implements ActionListener {
-    private static final long serialVersionUID = -8653871707049477151L;
-    private static final int windowHeight = 600;
-    private static final int windowWidth = 800;
-    private static final int previewSize = 100;
-    private static final int photoPadding = 15;
+    static final long serialVersionUID = -8653871707049477151L;
+    static final int windowHeight = 600;
+    static final int windowWidth = 800;
+    static final int previewSize = 100;
+    static final int photoPadding = 15;
+    static final int maxProcessingThreads = 3;
     final DefaultListModel model = new DefaultListModel();
-    private String currentDirectiory = new String("/home/volodymyr/Photos/");
+    String currentDirectiory = new String("/home/volodymyr/Photos/");
     
     JList photosList = new JList(model);
     JFrame frame = new JFrame("HDR Batch Helper");
     JLabel status = new JLabel(currentDirectiory);
+    JProgressBar progress = new JProgressBar();
+    JPanel statusPanel = new JPanel(new BorderLayout());
     JScrollPane listScroller = new JScrollPane(photosList);
     JMenuBar menuBar = new JMenuBar();
     JMenuItem menuItemOpen = new JMenuItem("Open");
     JMenuItem menuItemProcess = new JMenuItem("Process");
     ImageCellRenderer renderer = new ImageCellRenderer();
 
-    private MediaTracker mTracker = new MediaTracker(photosList);
+    MediaTracker mTracker = new MediaTracker(photosList);
     
-    // TODO implement load balancing using the queue
     LinkedList< HDRProcessingThread > processingQueue = new LinkedList< HDRProcessingThread >();
-    public static int sequenceId = 0;
+    ProcessorsObserver processingActivator = new ProcessorsObserver(); 
+    static int sequenceId = 0;
     
     public HDRBatchHelper() {
         renderer.setPreferredSize(new Dimension(previewSize + photoPadding, previewSize + photoPadding));
@@ -73,10 +79,13 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         menuItemOpen.addActionListener(this);
         menuItemProcess.addActionListener(this);
 
+        statusPanel.add(status, BorderLayout.WEST);
+        statusPanel.add(progress, BorderLayout.EAST);
+        
         frame.setJMenuBar(menuBar);
         frame.setLayout(new BorderLayout());
         frame.add(BorderLayout.CENTER, listScroller);
-        frame.add(BorderLayout.SOUTH, status);
+        frame.add(BorderLayout.SOUTH, statusPanel);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.pack(); // sets appropriate size for frame
         frame.setVisible(true);
@@ -85,6 +94,28 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         //actionPerformed(new ActionEvent(this, 0, "Open"));
     }
 
+    class ProcessorsObserver implements Observer {
+        private int runningThreads = 0;
+
+        public void activateProcessing() {
+            synchronized (this) {
+                int i = 0;
+                while ((i < maxProcessingThreads - runningThreads) && nextHdrStarted()) {
+                    runningThreads++;
+                    i++;
+                }
+            }
+            progress.setValue(runningThreads);
+            progress.setMaximum(runningThreads + processingQueue.size());
+        }
+
+        @Override
+        public void update(Observable o, Object arg) {
+            runningThreads--;
+            activateProcessing();
+        }
+    }
+    
     class JpegFilter implements FilenameFilter {
         public boolean accept(File dir, String name) {
             return (name.toLowerCase(Locale.ENGLISH).endsWith(".jpeg") ||
@@ -103,9 +134,12 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             model.clear();
             for (int i = 0; i < fileNames.length; i++) {
                 model.addElement( new IconFile(currentDirectiory + "/" + fileNames[i], i) );
+                setStatus("Items to load: " + String.valueOf(i) + "/" + String.valueOf(fileNames.length) + 
+                          " [" + currentDirectiory + "*]");
             }
+            setStatus("Items loaded: " + String.valueOf(fileNames.length) + " [" + currentDirectiory + "*]");            
         }
-    };
+    }
 
     private int loadPhotoFiles(String directory) {
         File files = new File(directory);
@@ -155,7 +189,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             setIcon( selectedImage.getIcon() );
             return this;
         }
-    };
+    }
 
     class IconFile implements Icon {
         private File file;
@@ -226,7 +260,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         public int getIconHeight() {
             return height;
         }
-    };
+    }
 
     @Override
     public void actionPerformed(ActionEvent e) {
@@ -241,8 +275,7 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
                 CharSequence chSeq = new String(" ");
                 if (! currentDirectiory.contains(chSeq)) {
                     setStatus("loading images...");
-                    int numberImageLoaded = loadPhotoFiles(currentDirectiory);
-                    setStatus("Items loaded: " + String.valueOf(numberImageLoaded) + " from " + currentDirectiory);
+                    loadPhotoFiles(currentDirectiory);
                 } else {
                     setStatus("Sorry, but the program does not support spases in dirnames for now...");
                 }
@@ -259,23 +292,24 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
         		}
 
         		HDRProcessingThread hdrSequence = new HDRProcessingThread(images, sequenceId++);
+        		hdrSequence.addObserver(processingActivator);
         		
             	synchronized (processingQueue) {
             		processingQueue.addFirst(hdrSequence);
             	}
-            	processHdrSequence();
-            	
+          	    processingActivator.activateProcessing();    
+
         	} else {
         		setStatus("You must select something!");
         	}
         }
     }
     
-    class HDRProcessingThread extends Thread {
+    class HDRProcessingThread extends Observable implements Runnable {
         public int sequenceId;
         private IconFile[] images;
         private Process process;
-        
+
         HDRProcessingThread(IconFile[] i, int id) {
             images = i;
             sequenceId = id;
@@ -301,6 +335,8 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             } catch (InterruptedException e2) {
                 e2.printStackTrace();
             }
+            setChanged();
+            notifyObservers();
         }
         
         private void cleanupTmp() {
@@ -328,18 +364,18 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
             tmpDirectory.delete();
             
             // delete .../tmp/
-            // actual deletion will be done when the last image will be processed
+            // actual deletion will be done when the last image will finished processing
             (new File(tmpDirectory.getParent())).delete();
         }
     }
     
-	private void processHdrSequence() {
+	private boolean nextHdrStarted() {
 	    HDRProcessingThread hdrTread;
 	    synchronized (processingQueue) {
 	        hdrTread = processingQueue.pollFirst();
         }
 	    if (hdrTread != null) {
-	        // copy images for processing
+	        // copy images for processing into #next directory
 	        File processingDir = new File(currentDirectiory + "tmp/" + hdrTread.sequenceId + "/");
 	        processingDir.mkdir();
 	        for ( IconFile imageFile : hdrTread.images ) {
@@ -350,10 +386,12 @@ public class HDRBatchHelper extends JPanel implements ActionListener {
 	                System.out.println("Error while renaming an image: " + imageFile.getFile().getPath());
 	            }
 	        }
-	        
-	        hdrTread.start();
+
+	        new Thread(hdrTread).start();
+	        return true;
 	    } else {
 	        System.out.println("Popping an element from empty processingQueue...");
 	    }
+	    return false;
 	}
 }
