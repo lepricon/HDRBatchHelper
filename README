@@ -1,0 +1,9 @@
+The aim of the project is to batch operations of creation of HRD images using
+aligning and tone mapping usign ImageMagic tools.
+
+The GUI helps you to choose images and allign them in the stack. The stacks
+are added to the queue which is passed to ImageMagic toolchain for processing.
+Load balancing is applied so that not more that N ( = 3 currently) threads
+are processing the queue at time.
+
+Eclipse is main development platform.
